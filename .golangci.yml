@@ -1,0 +1,27 @@
+version: "2"
+
+linters:
+  enable:
+    - errcheck
+    - gocritic
+    - gosec
+    - prealloc
+    - unconvert
+    - unparam
+    - misspell
+    - nolintlint
+    - errorlint
+    - exhaustive
+    - nilerr
+    - whitespace
+    - unused
+    - staticcheck
+
+output:
+  formats:
+    text:
+      print-linter-name: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
