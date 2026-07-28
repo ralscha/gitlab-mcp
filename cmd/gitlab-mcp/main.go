@@ -56,7 +56,7 @@ func run() error {
 }
 
 func runHTTP(ctx context.Context, cfg *config.Config, server *mcp.Server) error {
-	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, nil)
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true})
 	if cfg.AuthToken != "" {
 		handler = requireBearerToken(cfg.AuthToken, handler)
 	} else if cfg.IsReadWrite() {

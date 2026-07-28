@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type ListProjectsOptions struct {
@@ -82,12 +83,12 @@ func (c *Client) Search(ctx context.Context, opts SearchOptions) ([]map[string]a
 }
 
 func joinComma(values []string) string {
-	result := ""
+	var result strings.Builder
 	for i, value := range values {
 		if i > 0 {
-			result += ","
+			result.WriteString(",")
 		}
-		result += value
+		result.WriteString(value)
 	}
-	return result
+	return result.String()
 }

@@ -11,11 +11,24 @@ The default is `readonly`.
 
 ## Quick start
 
+### Using binary releases
+
+Download a pre-built binary from the [releases page](https://github.com/ralscha/gitlab-mcp/releases):
+
+```bash
+export GITLAB_TOKEN=glpat-your-token
+./gitlab-mcp --mode=readonly --transport=http --http-addr=127.0.0.1:8080 \
+  --auth-token=choose-a-separate-mcp-token
+```
+
+### Building from source
+
 Create a GitLab personal, project, or group access token, then run:
 
 ```bash
 export GITLAB_TOKEN=glpat-your-token
-go run ./cmd/gitlab-mcp --mode=readonly --transport=stdio
+go run ./cmd/gitlab-mcp --mode=readonly --transport=http --http-addr=127.0.0.1:8080 \
+  --auth-token=choose-a-separate-mcp-token
 ```
 
 For a self-managed instance:
