@@ -13,6 +13,11 @@ tasks:
       - go fix ./...
       - go fmt ./...
 
+  build:
+    desc: Build the GitLab MCP server
+    cmds:
+      - go build -o gitlab-mcp{{exeExt}} ./cmd/gitlab-mcp
+
   test:
     desc: Run all Go tests
     cmds:
