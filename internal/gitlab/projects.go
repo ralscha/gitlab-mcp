@@ -83,12 +83,5 @@ func (c *Client) Search(ctx context.Context, opts SearchOptions) ([]map[string]a
 }
 
 func joinComma(values []string) string {
-	var result strings.Builder
-	for i, value := range values {
-		if i > 0 {
-			result.WriteString(",")
-		}
-		result.WriteString(value)
-	}
-	return result.String()
+	return strings.Join(values, ",")
 }

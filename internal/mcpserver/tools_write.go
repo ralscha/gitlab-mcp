@@ -162,14 +162,16 @@ type AcceptMergeRequestInput struct {
 	SquashCommitMessage       string `json:"squash_commit_message,omitempty" jsonschema:"custom squash commit message"`
 	Squash                    *bool  `json:"squash,omitempty" jsonschema:"whether to squash commits"`
 	RemoveSourceBranch        *bool  `json:"remove_source_branch,omitempty" jsonschema:"whether to remove the source branch after merge"`
-	MergeWhenPipelineSucceeds bool   `json:"merge_when_pipeline_succeeds,omitempty" jsonschema:"queue the merge until the pipeline succeeds"`
+	AutoMerge                 bool   `json:"auto_merge,omitempty" jsonschema:"merge automatically when all checks pass"`
+	MergeWhenPipelineSucceeds bool   `json:"merge_when_pipeline_succeeds,omitempty" jsonschema:"deprecated alias for auto_merge"`
 }
 
 func acceptMergeRequest(client *gitlab.Client) mcp.ToolHandlerFor[AcceptMergeRequestInput, gitlab.MergeRequest] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in AcceptMergeRequestInput) (*mcp.CallToolResult, gitlab.MergeRequest, error) {
 		result, err := client.AcceptMergeRequest(ctx, in.Project, in.IID, gitlab.AcceptMergeRequestInput{
 			SHA: in.SHA, MergeCommitMessage: in.MergeCommitMessage, SquashCommitMessage: in.SquashCommitMessage,
-			Squash: in.Squash, ShouldRemoveSourceBranch: in.RemoveSourceBranch, MergeWhenPipelineSucceeds: in.MergeWhenPipelineSucceeds,
+			Squash: in.Squash, ShouldRemoveSourceBranch: in.RemoveSourceBranch,
+			AutoMerge: in.AutoMerge || in.MergeWhenPipelineSucceeds,
 		})
 		if err != nil {
 			return nil, gitlab.MergeRequest{}, fmt.Errorf("accept merge request %s!%d: %w", in.Project, in.IID, err)
@@ -252,7 +254,7 @@ func registerWriteTools(s *mcp.Server, client *gitlab.Client) {
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_merge_request", Description: "Create a GitLab merge request.", Annotations: nonDestructiveHint}, createMergeRequest(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_update_merge_request", Description: "Update, close, or reopen a GitLab merge request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: new(false), IdempotentHint: true}}, updateMergeRequest(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_add_merge_request_note", Description: "Add a Markdown note to a GitLab merge request.", Annotations: nonDestructiveHint}, addMergeRequestNote(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_accept_merge_request", Description: "Merge a GitLab merge request now or after its pipeline succeeds.", Annotations: destructiveHint}, acceptMergeRequest(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_accept_merge_request", Description: "Merge a GitLab merge request now or automatically when all checks pass.", Annotations: destructiveHint}, acceptMergeRequest(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_branch", Description: "Create a GitLab repository branch.", Annotations: nonDestructiveHint}, createBranch(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_commit", Description: "Create a GitLab commit with one or more create, update, move, delete, or chmod file actions.", Annotations: destructiveHint}, createCommit(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_pipeline", Description: "Run a new GitLab CI/CD pipeline. Pipelines can have deployment side effects.", Annotations: destructiveHint}, createPipeline(client))

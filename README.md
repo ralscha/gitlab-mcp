@@ -75,6 +75,7 @@ such as `group/subgroup/project`.
 | `gitlab_list_issue_notes` | List issue comments and system notes |
 | `gitlab_list_merge_requests` | List merge requests in a project or across projects |
 | `gitlab_get_merge_request` | Get a merge request by project and IID |
+| `gitlab_list_merge_request_diffs` | List the changed files and patches in a merge request |
 | `gitlab_list_merge_request_notes` | List merge request notes |
 | `gitlab_list_repository_tree` | Browse a repository tree |
 | `gitlab_get_file` | Read and decode a repository file at a ref |
@@ -99,16 +100,21 @@ These tools are registered only when `GITLAB_MODE=readwrite` or
 | `gitlab_create_merge_request` | Create a merge request |
 | `gitlab_update_merge_request` | Update, close, or reopen a merge request |
 | `gitlab_add_merge_request_note` | Add a merge request note |
-| `gitlab_accept_merge_request` | Merge now or after the pipeline succeeds |
+| `gitlab_accept_merge_request` | Merge now or automatically when all checks pass |
 | `gitlab_create_branch` | Create a branch from a ref |
 | `gitlab_create_commit` | Commit a batch of file create/update/move/delete/chmod actions |
 | `gitlab_create_pipeline` | Run a pipeline, optionally with variables and typed inputs |
 | `gitlab_retry_pipeline` | Retry failed or canceled pipeline jobs |
 
 Issue and merge-request descriptions and notes use GitLab Flavored Markdown
-directly. Repository file responses are capped at 25 MiB. Transient `429`,
-`502`, `503`, and `504` responses are retried up to three times, honoring
-`Retry-After`.
+directly. Repository file responses are capped at 25 MiB. Rate-limited `429`
+responses are retried up to three times for all replayable requests. Ambiguous
+`502`, `503`, and `504` responses are retried only for idempotent operations,
+preventing a create request from being duplicated. Retries honor `Retry-After`.
+
+Merge requests use GitLab's `Draft:` title convention for draft state. The
+merge tool accepts `auto_merge` to merge when all checks pass; the deprecated
+`merge_when_pipeline_succeeds` input remains available as an alias.
 
 ## Authentication and token scopes
 
@@ -185,7 +191,7 @@ VS Code `.vscode/mcp.json`:
 
 ## Development
 
-Requires Go 1.26 or newer.
+Requires Go 1.27.1 or newer, matching `go.mod`.
 
 ```bash
 go build ./...
@@ -194,8 +200,9 @@ go vet ./...
 ```
 
 Tests cover configuration, authentication, project-path and file-path
-encoding, pagination, API errors, retry handling, file decoding, commit
-payloads, tool mode gating, and end-to-end stdio and HTTP MCP connections.
+encoding, pagination headers and links, API errors, safe retry handling, merge
+request drafts and diffs, file decoding, commit payloads, tool mode gating, and
+end-to-end stdio and HTTP MCP connections.
 
 ## License
 

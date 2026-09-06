@@ -5,24 +5,28 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 )
 
 type ListMergeRequestsOptions struct {
-	Project      string
-	State        string
-	Scope        string
-	Search       string
-	SourceBranch string
-	TargetBranch string
-	Labels       []string
-	AuthorID     int
-	AssigneeID   int
-	ReviewerID   int
-	Draft        *bool
-	OrderBy      string
-	Sort         string
-	Page         int
-	PerPage      int
+	Project                string
+	State                  string
+	Scope                  string
+	Search                 string
+	SourceBranch           string
+	TargetBranch           string
+	Labels                 []string
+	AuthorID               int
+	AssigneeID             int
+	ReviewerID             int
+	Draft                  *bool
+	OrderBy                string
+	Sort                   string
+	UpdatedAfter           string
+	UpdatedBefore          string
+	WithMergeStatusRecheck bool
+	Page                   int
+	PerPage                int
 }
 
 func (c *Client) ListMergeRequests(ctx context.Context, opts ListMergeRequestsOptions) ([]MergeRequest, PageInfo, error) {
@@ -35,6 +39,11 @@ func (c *Client) ListMergeRequests(ctx context.Context, opts ListMergeRequestsOp
 	setIf(query, "labels", joinComma(opts.Labels))
 	setIf(query, "order_by", opts.OrderBy)
 	setIf(query, "sort", opts.Sort)
+	setIf(query, "updated_after", opts.UpdatedAfter)
+	setIf(query, "updated_before", opts.UpdatedBefore)
+	if opts.WithMergeStatusRecheck {
+		query.Set("with_merge_status_recheck", "true")
+	}
 	setBool(query, "draft", opts.Draft)
 	if opts.AuthorID > 0 {
 		query.Set("author_id", strconv.Itoa(opts.AuthorID))
@@ -61,6 +70,17 @@ func (c *Client) GetMergeRequest(ctx context.Context, project string, iid int) (
 	return &mergeRequest, err
 }
 
+func (c *Client) ListMergeRequestDiffs(ctx context.Context, project string, iid int, unidiff bool, page, perPage int) ([]MergeRequestDiff, PageInfo, error) {
+	query := pageQuery(page, perPage)
+	if unidiff {
+		query.Set("unidiff", "true")
+	}
+	path := fmt.Sprintf("%s/merge_requests/%d/diffs", projectPath(project), iid)
+	var diffs []MergeRequestDiff
+	headers, err := c.doJSON(ctx, http.MethodGet, path, query, nil, &diffs)
+	return diffs, pagination(headers, page, perPage, len(diffs)), err
+}
+
 type CreateMergeRequestInput struct {
 	SourceBranch       string
 	TargetBranch       string
@@ -77,12 +97,9 @@ type CreateMergeRequestInput struct {
 }
 
 func (c *Client) CreateMergeRequest(ctx context.Context, project string, in CreateMergeRequestInput) (*MergeRequest, error) {
-	body := map[string]any{"source_branch": in.SourceBranch, "target_branch": in.TargetBranch, "title": in.Title}
+	body := map[string]any{"source_branch": in.SourceBranch, "target_branch": in.TargetBranch, "title": setDraftTitle(in.Title, in.Draft)}
 	if in.Description != "" {
 		body["description"] = in.Description
-	}
-	if in.Draft {
-		body["draft"] = true
 	}
 	if len(in.AssigneeIDs) > 0 {
 		body["assignee_ids"] = in.AssigneeIDs
@@ -139,7 +156,15 @@ func (c *Client) UpdateMergeRequest(ctx context.Context, project string, iid int
 		body["state_event"] = *in.StateEvent
 	}
 	if in.Draft != nil {
-		body["draft"] = *in.Draft
+		title := in.Title
+		if title == nil {
+			current, err := c.GetMergeRequest(ctx, project, iid)
+			if err != nil {
+				return nil, fmt.Errorf("gitlab: get merge request title to change draft status: %w", err)
+			}
+			title = &current.Title
+		}
+		body["title"] = setDraftTitle(*title, *in.Draft)
 	}
 	if in.AssigneeIDs != nil {
 		body["assignee_ids"] = *in.AssigneeIDs
@@ -169,12 +194,12 @@ func (c *Client) UpdateMergeRequest(ctx context.Context, project string, iid int
 }
 
 type AcceptMergeRequestInput struct {
-	SHA                       string
-	MergeCommitMessage        string
-	SquashCommitMessage       string
-	Squash                    *bool
-	ShouldRemoveSourceBranch  *bool
-	MergeWhenPipelineSucceeds bool
+	SHA                      string
+	MergeCommitMessage       string
+	SquashCommitMessage      string
+	Squash                   *bool
+	ShouldRemoveSourceBranch *bool
+	AutoMerge                bool
 }
 
 func (c *Client) AcceptMergeRequest(ctx context.Context, project string, iid int, in AcceptMergeRequestInput) (*MergeRequest, error) {
@@ -194,13 +219,28 @@ func (c *Client) AcceptMergeRequest(ctx context.Context, project string, iid int
 	if in.ShouldRemoveSourceBranch != nil {
 		body["should_remove_source_branch"] = *in.ShouldRemoveSourceBranch
 	}
-	if in.MergeWhenPipelineSucceeds {
-		body["merge_when_pipeline_succeeds"] = true
+	if in.AutoMerge {
+		body["auto_merge"] = true
 	}
 	var mergeRequest MergeRequest
 	path := fmt.Sprintf("%s/merge_requests/%d/merge", projectPath(project), iid)
 	_, err := c.doJSON(ctx, http.MethodPut, path, nil, body, &mergeRequest)
 	return &mergeRequest, err
+}
+
+func setDraftTitle(title string, draft bool) string {
+	withoutPrefix := title
+	trimmed := strings.TrimLeft(title, " \t")
+	for _, prefix := range []string{"Draft:", "[Draft]", "(Draft)", "WIP:", "[WIP]", "(WIP)"} {
+		if len(trimmed) >= len(prefix) && strings.EqualFold(trimmed[:len(prefix)], prefix) {
+			withoutPrefix = strings.TrimLeft(trimmed[len(prefix):], " \t")
+			break
+		}
+	}
+	if draft {
+		return "Draft: " + withoutPrefix
+	}
+	return withoutPrefix
 }
 
 func (c *Client) ListMergeRequestNotes(ctx context.Context, project string, iid, page, perPage int, sort, orderBy string) ([]Note, PageInfo, error) {

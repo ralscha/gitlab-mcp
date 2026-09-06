@@ -153,21 +153,24 @@ func listIssueNotes(client *gitlab.Client) mcp.ToolHandlerFor[ListNotesInput, No
 }
 
 type ListMergeRequestsInput struct {
-	Project      string   `json:"project,omitempty" jsonschema:"optional project id or path; omit to list merge requests across projects"`
-	State        string   `json:"state,omitempty" jsonschema:"state filter: opened, closed, locked, merged, or all"`
-	Scope        string   `json:"scope,omitempty" jsonschema:"scope filter: created_by_me, assigned_to_me, or all"`
-	Search       string   `json:"search,omitempty" jsonschema:"search merge request title and description"`
-	SourceBranch string   `json:"source_branch,omitempty" jsonschema:"filter by source branch"`
-	TargetBranch string   `json:"target_branch,omitempty" jsonschema:"filter by target branch"`
-	Labels       []string `json:"labels,omitempty" jsonschema:"merge requests must have all of these labels"`
-	AuthorID     int      `json:"author_id,omitempty" jsonschema:"filter by numeric author id"`
-	AssigneeID   int      `json:"assignee_id,omitempty" jsonschema:"filter by numeric assignee id"`
-	ReviewerID   int      `json:"reviewer_id,omitempty" jsonschema:"filter by numeric reviewer id"`
-	Draft        *bool    `json:"draft,omitempty" jsonschema:"filter draft or non-draft merge requests"`
-	OrderBy      string   `json:"order_by,omitempty" jsonschema:"sort field such as created_at or updated_at"`
-	Sort         string   `json:"sort,omitempty" jsonschema:"sort direction: asc or desc"`
-	Page         int      `json:"page,omitempty" jsonschema:"page number, starting at 1"`
-	PerPage      int      `json:"per_page,omitempty" jsonschema:"results per page, defaults to 20 and is capped at 100"`
+	Project                string   `json:"project,omitempty" jsonschema:"optional project id or path; omit to list merge requests across projects"`
+	State                  string   `json:"state,omitempty" jsonschema:"state filter: opened, closed, locked, merged, or all"`
+	Scope                  string   `json:"scope,omitempty" jsonschema:"scope filter: created_by_me, assigned_to_me, reviews_for_me, or all"`
+	Search                 string   `json:"search,omitempty" jsonschema:"search merge request title and description"`
+	SourceBranch           string   `json:"source_branch,omitempty" jsonschema:"filter by source branch"`
+	TargetBranch           string   `json:"target_branch,omitempty" jsonschema:"filter by target branch"`
+	Labels                 []string `json:"labels,omitempty" jsonschema:"merge requests must have all of these labels"`
+	AuthorID               int      `json:"author_id,omitempty" jsonschema:"filter by numeric author id"`
+	AssigneeID             int      `json:"assignee_id,omitempty" jsonschema:"filter by numeric assignee id"`
+	ReviewerID             int      `json:"reviewer_id,omitempty" jsonschema:"filter by numeric reviewer id"`
+	Draft                  *bool    `json:"draft,omitempty" jsonschema:"filter draft or non-draft merge requests"`
+	OrderBy                string   `json:"order_by,omitempty" jsonschema:"sort field such as created_at or updated_at"`
+	Sort                   string   `json:"sort,omitempty" jsonschema:"sort direction: asc or desc"`
+	UpdatedAfter           string   `json:"updated_after,omitempty" jsonschema:"ISO 8601 timestamp lower bound for updated_at"`
+	UpdatedBefore          string   `json:"updated_before,omitempty" jsonschema:"ISO 8601 timestamp upper bound for updated_at"`
+	WithMergeStatusRecheck bool     `json:"with_merge_status_recheck,omitempty" jsonschema:"request recalculation of merge status and conflict fields"`
+	Page                   int      `json:"page,omitempty" jsonschema:"page number, starting at 1"`
+	PerPage                int      `json:"per_page,omitempty" jsonschema:"results per page, defaults to 20 and is capped at 100"`
 }
 
 type MergeRequestsPage struct {
@@ -180,7 +183,9 @@ func listMergeRequests(client *gitlab.Client) mcp.ToolHandlerFor[ListMergeReques
 		items, page, err := client.ListMergeRequests(ctx, gitlab.ListMergeRequestsOptions{
 			Project: in.Project, State: in.State, Scope: in.Scope, Search: in.Search, SourceBranch: in.SourceBranch,
 			TargetBranch: in.TargetBranch, Labels: in.Labels, AuthorID: in.AuthorID, AssigneeID: in.AssigneeID,
-			ReviewerID: in.ReviewerID, Draft: in.Draft, OrderBy: in.OrderBy, Sort: in.Sort, Page: in.Page, PerPage: in.PerPage,
+			ReviewerID: in.ReviewerID, Draft: in.Draft, OrderBy: in.OrderBy, Sort: in.Sort,
+			UpdatedAfter: in.UpdatedAfter, UpdatedBefore: in.UpdatedBefore, WithMergeStatusRecheck: in.WithMergeStatusRecheck,
+			Page: in.Page, PerPage: in.PerPage,
 		})
 		if err != nil {
 			return nil, MergeRequestsPage{}, fmt.Errorf("list GitLab merge requests: %w", err)
@@ -201,6 +206,29 @@ func getMergeRequest(client *gitlab.Client) mcp.ToolHandlerFor[MergeRequestInput
 			return nil, gitlab.MergeRequest{}, fmt.Errorf("get GitLab merge request %s!%d: %w", in.Project, in.IID, err)
 		}
 		return nil, *result, nil
+	}
+}
+
+type ListMergeRequestDiffsInput struct {
+	Project string `json:"project" jsonschema:"numeric project id or path such as group/project"`
+	IID     int    `json:"iid" jsonschema:"project-scoped merge request IID shown as !123 in GitLab"`
+	Unidiff bool   `json:"unidiff,omitempty" jsonschema:"return each file change in unified diff format"`
+	Page    int    `json:"page,omitempty" jsonschema:"page number, starting at 1"`
+	PerPage int    `json:"per_page,omitempty" jsonschema:"file diffs per page, defaults to 20 and is capped at 100"`
+}
+
+type MergeRequestDiffsPage struct {
+	Pagination gitlab.PageInfo           `json:"pagination"`
+	Diffs      []gitlab.MergeRequestDiff `json:"diffs"`
+}
+
+func listMergeRequestDiffs(client *gitlab.Client) mcp.ToolHandlerFor[ListMergeRequestDiffsInput, MergeRequestDiffsPage] {
+	return func(ctx context.Context, _ *mcp.CallToolRequest, in ListMergeRequestDiffsInput) (*mcp.CallToolResult, MergeRequestDiffsPage, error) {
+		items, page, err := client.ListMergeRequestDiffs(ctx, in.Project, in.IID, in.Unidiff, in.Page, in.PerPage)
+		if err != nil {
+			return nil, MergeRequestDiffsPage{}, fmt.Errorf("list diffs for merge request %s!%d: %w", in.Project, in.IID, err)
+		}
+		return nil, MergeRequestDiffsPage{Pagination: page, Diffs: items}, nil
 	}
 }
 
@@ -430,6 +458,7 @@ func registerReadTools(s *mcp.Server, client *gitlab.Client) {
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_issue_notes", Description: "List notes (comments and system events) on a GitLab issue.", Annotations: readOnlyHint}, listIssueNotes(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_merge_requests", Description: "List and filter GitLab merge requests in one project or across projects.", Annotations: readOnlyHint}, listMergeRequests(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_merge_request", Description: "Get one GitLab merge request by project and IID.", Annotations: readOnlyHint}, getMergeRequest(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_merge_request_diffs", Description: "List the per-file diffs for a GitLab merge request.", Annotations: readOnlyHint}, listMergeRequestDiffs(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_merge_request_notes", Description: "List notes on a GitLab merge request.", Annotations: readOnlyHint}, listMergeRequestNotes(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_repository_tree", Description: "List files and directories in a GitLab repository tree.", Annotations: readOnlyHint}, listRepositoryTree(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_file", Description: "Read a repository file at a branch, tag, or commit.", Annotations: readOnlyHint}, getFile(client))

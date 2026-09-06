@@ -12,7 +12,7 @@ import (
 var readToolNames = []string{
 	"gitlab_get_metadata", "gitlab_get_current_user", "gitlab_list_projects", "gitlab_get_project",
 	"gitlab_list_issues", "gitlab_get_issue", "gitlab_list_issue_notes",
-	"gitlab_list_merge_requests", "gitlab_get_merge_request", "gitlab_list_merge_request_notes",
+	"gitlab_list_merge_requests", "gitlab_get_merge_request", "gitlab_list_merge_request_diffs", "gitlab_list_merge_request_notes",
 	"gitlab_list_repository_tree", "gitlab_get_file", "gitlab_list_branches", "gitlab_list_commits", "gitlab_get_commit",
 	"gitlab_list_pipelines", "gitlab_get_pipeline", "gitlab_list_pipeline_jobs", "gitlab_search",
 }

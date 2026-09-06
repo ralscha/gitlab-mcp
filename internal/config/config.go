@@ -89,13 +89,14 @@ func Load(args []string) (*Config, error) {
 func (c *Config) validate() error {
 	var problems []string
 	parsed, err := url.Parse(c.GitLabBaseURL)
-	if err != nil {
+	switch {
+	case err != nil:
 		problems = append(problems, fmt.Sprintf("GITLAB_BASE_URL is not a valid URL: %v", err))
-	} else if parsed.Scheme != "https" || parsed.Host == "" {
+	case parsed.Scheme != "https" || parsed.Host == "":
 		problems = append(problems, "GITLAB_BASE_URL must be an absolute https URL")
-	} else if parsed.User != nil {
+	case parsed.User != nil:
 		problems = append(problems, "GITLAB_BASE_URL must not contain user information")
-	} else if parsed.RawQuery != "" || parsed.Fragment != "" {
+	case parsed.RawQuery != "" || parsed.Fragment != "":
 		problems = append(problems, "GITLAB_BASE_URL must not contain a query string or fragment")
 	}
 	if c.GitLabToken == "" {

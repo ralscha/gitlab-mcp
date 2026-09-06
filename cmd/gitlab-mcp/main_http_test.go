@@ -27,10 +27,12 @@ func TestHTTPTransportListTools(t *testing.T) {
 	_ = listener.Close()
 	addr := "127.0.0.1:" + strconv.Itoa(port)
 	exe := filepath.Join(t.TempDir(), "gitlab-mcp.exe")
+	//nolint:gosec // The executable output is an isolated test temp path.
 	build := exec.CommandContext(ctx, "go", "build", "-o", exe, ".")
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, output)
 	}
+	//nolint:gosec // exe is the binary built above in an isolated test temp path.
 	cmd := exec.CommandContext(ctx, exe, "--gitlab-token=test-token", "--mode=readwrite", "--transport=http", "--http-addr="+addr, "--auth-token=mcp-secret")
 	cmd.Env = os.Environ()
 	var logs lockedBuffer

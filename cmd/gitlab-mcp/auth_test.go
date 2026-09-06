@@ -12,9 +12,12 @@ func TestRequireBearerToken(t *testing.T) {
 		want         int
 	}{
 		{"valid", "Bearer secret", http.StatusNoContent},
+		{"case insensitive scheme", "bearer secret", http.StatusNoContent},
+		{"optional whitespace", "Bearer   secret", http.StatusNoContent},
 		{"missing", "", http.StatusUnauthorized},
 		{"wrong token", "Bearer nope", http.StatusUnauthorized},
 		{"wrong scheme", "Basic secret", http.StatusUnauthorized},
+		{"extra value", "Bearer secret extra", http.StatusUnauthorized},
 	}
 	handler := requireBearerToken("secret", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
 	for _, tt := range tests {

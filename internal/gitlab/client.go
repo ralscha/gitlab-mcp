@@ -91,13 +91,15 @@ func (c *Client) do(req *http.Request, maxBytes int64) (*http.Response, []byte, 
 		if readErr != nil {
 			return nil, nil, readErr
 		}
-		if attempt >= maxRetries || !isRetryable(resp.StatusCode) {
+		if attempt >= maxRetries || !isRetryable(req, resp.StatusCode) {
 			return resp, body, nil
 		}
+		timer := time.NewTimer(retryDelay(resp, attempt))
 		select {
 		case <-req.Context().Done():
+			timer.Stop()
 			return nil, nil, fmt.Errorf("gitlab: request failed: %w", req.Context().Err())
-		case <-time.After(retryDelay(resp, attempt)):
+		case <-timer.C:
 		}
 		if req.GetBody != nil {
 			rewound, err := req.GetBody()
@@ -109,13 +111,22 @@ func (c *Client) do(req *http.Request, maxBytes int64) (*http.Response, []byte, 
 	}
 }
 
-func isRetryable(status int) bool {
-	switch status {
-	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
-		return true
-	default:
-		return false
+func isRetryable(req *http.Request, status int) bool {
+	// A rate-limited request has not been accepted and is safe to retry. For
+	// ambiguous gateway failures, retry only methods defined as idempotent so a
+	// create operation cannot be replayed after GitLab already processed it.
+	if status == http.StatusTooManyRequests {
+		return req.Body == nil || req.GetBody != nil
 	}
+	switch status {
+	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		switch req.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+			return req.Body == nil || req.GetBody != nil
+		}
+	default:
+	}
+	return false
 }
 
 func retryDelay(resp *http.Response, attempt int) time.Duration {
@@ -218,6 +229,11 @@ func parseAPIError(status int, body []byte) *APIError {
 func projectPath(project string) string { return "projects/" + url.PathEscape(project) }
 
 func pageQuery(page, perPage int) url.Values {
+	page, perPage = normalizePage(page, perPage)
+	return url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(perPage)}}
+}
+
+func normalizePage(page, perPage int) (int, int) {
 	if page <= 0 {
 		page = 1
 	}
@@ -225,27 +241,80 @@ func pageQuery(page, perPage int) url.Values {
 		perPage = 20
 	}
 	perPage = min(perPage, 100)
-	return url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(perPage)}}
+	return page, perPage
 }
 
 func pagination(headers http.Header, page, perPage, resultCount int) PageInfo {
+	page, perPage = normalizePage(page, perPage)
 	info := PageInfo{Page: page, PerPage: perPage}
+	setFromHeader(&info.Page, headers, "X-Page")
+	setFromHeader(&info.PerPage, headers, "X-Per-Page")
 	info.Total, _ = strconv.Atoi(headers.Get("X-Total"))
 	info.TotalPages, _ = strconv.Atoi(headers.Get("X-Total-Pages"))
 	info.NextPage, _ = strconv.Atoi(headers.Get("X-Next-Page"))
 	info.PreviousPage, _ = strconv.Atoi(headers.Get("X-Prev-Page"))
-	if info.Page <= 0 {
-		info.Page = 1
+	nextLinkPage, hasNextLink := linkedPage(headers.Get("Link"), "next")
+	if info.NextPage == 0 {
+		info.NextPage = nextLinkPage
 	}
-	if info.PerPage <= 0 {
-		info.PerPage = 20
+	if info.PreviousPage == 0 {
+		info.PreviousPage, _ = linkedPage(headers.Get("Link"), "prev")
 	}
-	if info.TotalPages == 0 && info.NextPage == 0 && resultCount < info.PerPage {
+	if info.TotalPages == 0 {
+		info.TotalPages, _ = linkedPage(headers.Get("Link"), "last")
+	}
+	hasNextHeader := headerPresent(headers, "X-Next-Page")
+	switch {
+	case info.NextPage > 0 || hasNextLink:
+		info.LastPage = false
+	case info.TotalPages > 0:
+		info.LastPage = info.Page >= info.TotalPages
+	case hasNextHeader && strings.TrimSpace(headers.Get("X-Next-Page")) == "":
 		info.LastPage = true
-	} else {
-		info.LastPage = info.NextPage == 0
+	case headers.Get("Link") != "":
+		info.LastPage = true
+	default:
+		// Without pagination headers, a full page is ambiguous. Do not claim it
+		// is the last page and risk making callers stop early.
+		info.LastPage = resultCount < info.PerPage
 	}
 	return info
+}
+
+func setFromHeader(target *int, headers http.Header, name string) {
+	if value, err := strconv.Atoi(headers.Get(name)); err == nil && value > 0 {
+		*target = value
+	}
+}
+
+func headerPresent(headers http.Header, name string) bool {
+	_, ok := headers[http.CanonicalHeaderKey(name)]
+	return ok
+}
+
+func linkedPage(linkHeader, relation string) (int, bool) {
+	for _, link := range strings.Split(linkHeader, ",") {
+		parts := strings.Split(link, ";")
+		matched := false
+		for _, parameter := range parts[1:] {
+			name, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
+			if ok && strings.EqualFold(name, "rel") && strings.EqualFold(strings.Trim(value, `"`), relation) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			continue
+		}
+		target := strings.Trim(strings.TrimSpace(parts[0]), "<>")
+		parsed, err := url.Parse(target)
+		if err != nil {
+			return 0, true
+		}
+		page, _ := strconv.Atoi(parsed.Query().Get("page"))
+		return page, true
+	}
+	return 0, false
 }
 
 func setIf(query url.Values, key, value string) {

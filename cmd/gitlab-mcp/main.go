@@ -62,7 +62,13 @@ func runHTTP(ctx context.Context, cfg *config.Config, server *mcp.Server) error 
 	} else if cfg.IsReadWrite() {
 		log.Print("gitlab-mcp: warning: HTTP transport in readwrite mode without --auth-token; anyone who can reach this address can modify GitLab")
 	}
-	httpServer := &http.Server{Addr: cfg.HTTPAddr, Handler: handler, ReadHeaderTimeout: 10 * time.Second}
+	httpServer := &http.Server{
+		Addr:              cfg.HTTPAddr,
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
+	}
 	errCh := make(chan error, 1)
 	go func() {
 		//nolint:gosec // %q escapes control characters.
@@ -85,9 +91,10 @@ func runHTTP(ctx context.Context, cfg *config.Config, server *mcp.Server) error 
 func requireBearerToken(token string, next http.Handler) http.Handler {
 	want := []byte(token)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		got, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !ok || subtle.ConstantTimeCompare([]byte(got), want) != 1 {
+		parts := strings.Fields(r.Header.Get("Authorization"))
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || subtle.ConstantTimeCompare([]byte(parts[1]), want) != 1 {
 			w.Header().Set("WWW-Authenticate", `Bearer realm="gitlab-mcp"`)
+			w.Header().Set("Cache-Control", "no-store")
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

@@ -53,6 +53,8 @@ func TestListIssuesPaginationAndFilters(t *testing.T) {
 		if r.URL.Query().Get("page") != "2" || r.URL.Query().Get("per_page") != "100" {
 			t.Errorf("query = %v", r.URL.Query())
 		}
+		w.Header().Set("X-Page", "2")
+		w.Header().Set("X-Per-Page", "100")
 		w.Header().Set("X-Total", "201")
 		w.Header().Set("X-Total-Pages", "3")
 		w.Header().Set("X-Next-Page", "3")
@@ -62,8 +64,34 @@ func TestListIssuesPaginationAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
-	if len(issues) != 1 || page.Total != 201 || page.NextPage != 3 || page.LastPage {
+	if len(issues) != 1 || page.Page != 2 || page.PerPage != 100 || page.Total != 201 || page.NextPage != 3 || page.LastPage {
 		t.Errorf("issues=%v page=%#v", issues, page)
+	}
+}
+
+func TestPaginationUsesLinkHeaderFallback(t *testing.T) {
+	headers := http.Header{
+		"Link": {`<https://gitlab.example.com/api/v4/projects?page=1&per_page=20>; rel="prev", <https://gitlab.example.com/api/v4/projects?page=3&per_page=20>; rel="next", <https://gitlab.example.com/api/v4/projects?page=7&per_page=20>; rel="last"`},
+	}
+	page := pagination(headers, 2, 20, 20)
+	if page.PreviousPage != 1 || page.NextPage != 3 || page.TotalPages != 7 || page.LastPage {
+		t.Fatalf("pagination() = %#v", page)
+	}
+}
+
+func TestPaginationDoesNotGuessFullPageIsLast(t *testing.T) {
+	page := pagination(nil, 1, 999, 100)
+	if page.PerPage != 100 || page.LastPage {
+		t.Fatalf("pagination() = %#v", page)
+	}
+}
+
+func TestPaginationRecognizesExplicitLastPage(t *testing.T) {
+	headers := make(http.Header)
+	headers.Set("X-Next-Page", "")
+	page := pagination(headers, 2, 20, 20)
+	if !page.LastPage {
+		t.Fatalf("pagination() = %#v", page)
 	}
 }
 
@@ -148,6 +176,43 @@ func TestRetriesRateLimitResponse(t *testing.T) {
 	project, err := client.GetProject(t.Context(), "1")
 	if err != nil || project.Name != "ok" || calls.Load() != 2 {
 		t.Fatalf("project=%#v calls=%d err=%v", project, calls.Load(), err)
+	}
+}
+
+func TestRetriesRateLimitedCreateAndRewindsBody(t *testing.T) {
+	var calls atomic.Int32
+	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["title"] != "rate limited" {
+			t.Errorf("body = %#v", body)
+		}
+		if calls.Add(1) == 1 {
+			w.Header().Set("Retry-After", "0")
+			w.WriteHeader(http.StatusTooManyRequests)
+			return
+		}
+		_, _ = w.Write([]byte(`{"iid":1,"title":"rate limited","state":"opened"}`))
+	})
+	issue, err := client.CreateIssue(t.Context(), "1", CreateIssueInput{Title: "rate limited"})
+	if err != nil || issue.Title != "rate limited" || calls.Load() != 2 {
+		t.Fatalf("issue=%#v calls=%d err=%v", issue, calls.Load(), err)
+	}
+}
+
+func TestDoesNotRetryCreateAfterAmbiguousServerError(t *testing.T) {
+	var calls atomic.Int32
+	client := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"message":"try later"}`))
+	})
+	_, err := client.CreateIssue(t.Context(), "1", CreateIssueInput{Title: "do not duplicate"})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || calls.Load() != 1 {
+		t.Fatalf("calls=%d error=%#v", calls.Load(), err)
 	}
 }
 
