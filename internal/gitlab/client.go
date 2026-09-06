@@ -293,7 +293,7 @@ func headerPresent(headers http.Header, name string) bool {
 }
 
 func linkedPage(linkHeader, relation string) (int, bool) {
-	for _, link := range strings.Split(linkHeader, ",") {
+	for link := range strings.SplitSeq(linkHeader, ",") {
 		parts := strings.Split(link, ";")
 		matched := false
 		for _, parameter := range parts[1:] {
