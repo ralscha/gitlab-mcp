@@ -211,6 +211,7 @@ type Job struct {
 	Name           string       `json:"name"`
 	Stage          string       `json:"stage"`
 	Status         string       `json:"status"`
+	FailureReason  string       `json:"failure_reason,omitempty"`
 	Ref            string       `json:"ref,omitempty"`
 	Tag            bool         `json:"tag"`
 	AllowFailure   bool         `json:"allow_failure"`

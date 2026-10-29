@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -38,6 +39,10 @@ type Config struct {
 // Load reads environment defaults and applies command-line flag overrides.
 // GITLAB_BASE_URL defaults to GitLab.com. GITLAB_TOKEN is always required.
 func Load(args []string) (*Config, error) {
+	return load(args, os.Stderr)
+}
+
+func load(args []string, output io.Writer) (*Config, error) {
 	cfg := &Config{
 		GitLabBaseURL: "https://gitlab.com",
 		GitLabToken:   os.Getenv("GITLAB_TOKEN"),
@@ -60,26 +65,36 @@ func Load(args []string) (*Config, error) {
 	}
 
 	fs := flag.NewFlagSet("gitlab-mcp", flag.ContinueOnError)
+	fs.SetOutput(output)
 	baseURL := fs.String("gitlab-base-url", cfg.GitLabBaseURL, "GitLab instance URL, e.g. https://gitlab.com")
-	token := fs.String("gitlab-token", cfg.GitLabToken, "GitLab personal, project, or group access token")
+	// Func flags do not include their values in usage output. In particular,
+	// environment-provided credentials must never become printed defaults.
+	fs.Func("gitlab-token", "GitLab personal, project, or group access token", func(value string) error {
+		cfg.GitLabToken = value
+		return nil
+	})
 	mode := fs.String("mode", string(cfg.Mode), "Server mode: readonly or readwrite")
 	transport := fs.String("transport", string(cfg.Transport), "Transport: stdio or http")
 	httpAddr := fs.String("http-addr", cfg.HTTPAddr, "Address to listen on when --transport=http")
-	authToken := fs.String("auth-token", cfg.AuthToken, "Bearer token required from HTTP MCP clients")
+	fs.Func("auth-token", "Bearer token required from HTTP MCP clients", func(value string) error {
+		cfg.AuthToken = value
+		return nil
+	})
 	showVersion := fs.Bool("version", false, "Print the gitlab-mcp version and exit")
 	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+	if fs.NArg() != 0 {
+		return nil, errors.New("unexpected positional arguments; use --help for usage")
 	}
 	if *showVersion {
 		return nil, ErrVersionRequested
 	}
 
 	cfg.GitLabBaseURL = strings.TrimRight(*baseURL, "/")
-	cfg.GitLabToken = *token
 	cfg.Mode = Mode(*mode)
 	cfg.Transport = Transport(*transport)
 	cfg.HTTPAddr = *httpAddr
-	cfg.AuthToken = *authToken
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}

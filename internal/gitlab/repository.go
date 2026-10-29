@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type ListTreeOptions struct {
@@ -34,6 +36,7 @@ type FileContent struct {
 	FileName      string `json:"file_name"`
 	FilePath      string `json:"file_path"`
 	Size          int    `json:"size"`
+	Encoding      string `json:"encoding"`
 	Content       string `json:"content"`
 	ContentSHA256 string `json:"content_sha256,omitempty"`
 	Ref           string `json:"ref"`
@@ -65,9 +68,15 @@ func (c *Client) GetFile(ctx context.Context, project, filePath, ref string) (*F
 	if len(decoded) > MaxFileBytes {
 		return nil, fmt.Errorf("%w: decoded file is %d bytes, limit is %d", ErrTooLarge, len(decoded), MaxFileBytes)
 	}
+	encoding, content := "base64", compact
+	// JSON strings must be UTF-8. Keep invalid UTF-8 as base64 so JSON encoding
+	// does not silently replace binary data with U+FFFD.
+	if utf8.Valid(decoded) {
+		encoding, content = "text", string(decoded)
+	}
 	return &FileContent{
 		FileName: file.FileName, FilePath: file.FilePath, Size: file.Size,
-		Content: string(decoded), ContentSHA256: file.ContentSHA256, Ref: file.Ref,
+		Encoding: encoding, Content: content, ContentSHA256: file.ContentSHA256, Ref: file.Ref,
 		BlobID: file.BlobID, CommitID: file.CommitID, LastCommitID: file.LastCommitID,
 	}, nil
 }
@@ -132,13 +141,13 @@ func (c *Client) GetCommit(ctx context.Context, project, sha string, stats bool)
 }
 
 type CommitAction struct {
-	Action          string `json:"action"`
-	FilePath        string `json:"file_path"`
-	PreviousPath    string `json:"previous_path,omitempty"`
-	Content         string `json:"content,omitempty"`
-	Encoding        string `json:"encoding,omitempty"`
-	LastCommitID    string `json:"last_commit_id,omitempty"`
-	ExecuteFilemode *bool  `json:"execute_filemode,omitempty"`
+	Action          string  `json:"action"`
+	FilePath        string  `json:"file_path"`
+	PreviousPath    string  `json:"previous_path,omitempty"`
+	Content         *string `json:"content,omitempty"`
+	Encoding        string  `json:"encoding,omitempty"`
+	LastCommitID    string  `json:"last_commit_id,omitempty"`
+	ExecuteFilemode *bool   `json:"execute_filemode,omitempty"`
 }
 
 type CreateCommitInput struct {
@@ -164,19 +173,39 @@ func (c *Client) CreateCommit(ctx context.Context, project string, in CreateComm
 		if action.FilePath == "" {
 			return nil, fmt.Errorf("gitlab: action %d requires file_path", i)
 		}
+		switch action.Action {
+		case "create", "update":
+			if action.Content == nil {
+				return nil, fmt.Errorf("gitlab: action %d requires content (use an empty string for an empty file)", i)
+			}
+		case "move":
+			if action.PreviousPath == "" {
+				return nil, fmt.Errorf("gitlab: action %d requires previous_path", i)
+			}
+		case "chmod":
+			if action.ExecuteFilemode == nil {
+				return nil, fmt.Errorf("gitlab: action %d requires execute_filemode", i)
+			}
+		}
 		if action.Encoding != "" && action.Encoding != "text" && action.Encoding != "base64" {
 			return nil, fmt.Errorf("gitlab: action %d has invalid encoding %q", i, action.Encoding)
 		}
+		if action.Content == nil {
+			continue
+		}
 		if action.Encoding == "base64" {
-			decoded, err := base64.StdEncoding.DecodeString(action.Content)
+			// Validate without allocating a second copy of every binary file, and
+			// stop decoding as soon as the per-file limit is exceeded.
+			decoder := base64.NewDecoder(base64.StdEncoding, strings.NewReader(*action.Content))
+			size, err := io.Copy(io.Discard, io.LimitReader(decoder, MaxFileBytes+1))
 			if err != nil {
 				return nil, fmt.Errorf("gitlab: action %d has invalid base64 content: %w", i, err)
 			}
-			if len(decoded) > MaxFileBytes {
-				return nil, fmt.Errorf("%w: action %d content is %d bytes", ErrTooLarge, i, len(decoded))
+			if size > MaxFileBytes {
+				return nil, fmt.Errorf("%w: action %d content exceeds %d bytes", ErrTooLarge, i, MaxFileBytes)
 			}
-		} else if len(action.Content) > MaxFileBytes {
-			return nil, fmt.Errorf("%w: action %d content is %d bytes", ErrTooLarge, i, len(action.Content))
+		} else if len(*action.Content) > MaxFileBytes {
+			return nil, fmt.Errorf("%w: action %d content is %d bytes", ErrTooLarge, i, len(*action.Content))
 		}
 	}
 	body := map[string]any{"branch": in.Branch, "commit_message": in.CommitMessage, "actions": in.Actions}

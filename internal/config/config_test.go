@@ -1,7 +1,9 @@
 package config
 
 import (
+	"bytes"
 	"errors"
+	"flag"
 	"strings"
 	"testing"
 )
@@ -73,6 +75,8 @@ func TestLoadValidation(t *testing.T) {
 		{"userinfo URL", []string{"--gitlab-base-url=https://user:password@gitlab.example.com", "--gitlab-token=x"}, "user information"},
 		{"bad mode", []string{"--gitlab-token=x", "--mode=write"}, "invalid mode"},
 		{"bad transport", []string{"--gitlab-token=x", "--transport=sse"}, "invalid transport"},
+		{"positional argument", []string{"--gitlab-token=x", "unexpected"}, "positional arguments"},
+		{"flags after positional argument", []string{"unexpected", "--gitlab-token=x"}, "positional arguments"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -82,6 +86,56 @@ func TestLoadValidation(t *testing.T) {
 				t.Fatalf("Load() error = %v, want containing %q", err, tt.want)
 			}
 		})
+	}
+}
+
+func TestUsageDoesNotExposeCredentials(t *testing.T) {
+	for _, args := range [][]string{{"--help"}, {"--unknown-flag"}, {"--gitlab-token=flag-gitlab-secret", "--auth-token=flag-mcp-secret", "--help"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			clearEnv(t)
+			t.Setenv("GITLAB_TOKEN", "env-gitlab-secret")
+			t.Setenv("MCP_AUTH_TOKEN", "env-mcp-secret")
+			var output bytes.Buffer
+			_, err := load(args, &output)
+			if err == nil {
+				t.Fatal("expected help or flag parse error")
+			}
+			if args[len(args)-1] == "--help" && !errors.Is(err, flag.ErrHelp) {
+				t.Fatalf("error = %v, want flag.ErrHelp", err)
+			}
+			if !strings.Contains(output.String(), "Usage of gitlab-mcp") {
+				t.Fatalf("missing usage output: %s", output.String())
+			}
+			for _, secret := range []string{"env-gitlab-secret", "env-mcp-secret", "flag-gitlab-secret", "flag-mcp-secret"} {
+				if strings.Contains(output.String(), secret) {
+					t.Error("usage output exposed a credential")
+				}
+			}
+		})
+	}
+}
+
+func TestCredentialDefaultsAndEmptyOverrides(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("GITLAB_TOKEN", "env-gitlab-secret")
+	t.Setenv("MCP_AUTH_TOKEN", "env-mcp-secret")
+	cfg, err := Load(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.GitLabToken != "env-gitlab-secret" || cfg.AuthToken != "env-mcp-secret" {
+		t.Fatal("environment credentials were not preserved")
+	}
+	cfg, err = Load([]string{"--auth-token="})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AuthToken != "" {
+		t.Error("explicit empty auth token did not override environment")
+	}
+	_, err = Load([]string{"--gitlab-token="})
+	if err == nil || !strings.Contains(err.Error(), "GITLAB_TOKEN") {
+		t.Fatalf("explicit empty GitLab token: error = %v", err)
 	}
 }
 

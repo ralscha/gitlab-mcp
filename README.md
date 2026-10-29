@@ -78,13 +78,15 @@ such as `group/subgroup/project`.
 | `gitlab_list_merge_request_diffs` | List the changed files and patches in a merge request |
 | `gitlab_list_merge_request_notes` | List merge request notes |
 | `gitlab_list_repository_tree` | Browse a repository tree |
-| `gitlab_get_file` | Read and decode a repository file at a ref |
+| `gitlab_get_file` | Read a repository file at a ref, defaulting to the default branch |
 | `gitlab_list_branches` | List repository branches |
 | `gitlab_list_commits` | List repository commits |
 | `gitlab_get_commit` | Get one commit |
 | `gitlab_list_pipelines` | List project pipelines |
 | `gitlab_get_pipeline` | Get one pipeline |
 | `gitlab_list_pipeline_jobs` | List jobs in a pipeline |
+| `gitlab_get_job` | Get a CI/CD job by its job ID |
+| `gitlab_get_job_trace` | Read a CI/CD job log (up to 1 MiB) |
 | `gitlab_search` | Search globally or within a group or project |
 
 ### Write tools
@@ -107,10 +109,27 @@ These tools are registered only when `GITLAB_MODE=readwrite` or
 | `gitlab_retry_pipeline` | Retry failed or canceled pipeline jobs |
 
 Issue and merge-request descriptions and notes use GitLab Flavored Markdown
-directly. Repository file responses are capped at 25 MiB. Rate-limited `429`
-responses are retried up to three times for all replayable requests. Ambiguous
-`502`, `503`, and `504` responses are retried only for idempotent operations,
-preventing a create request from being duplicated. Retries honor `Retry-After`.
+directly, including [quick actions](https://docs.gitlab.com/user/project/quick_actions/)
+that can change project state. Repository files are capped at 25 MiB decoded.
+`gitlab_get_file` returns `encoding: "text"` for UTF-8 content and
+`encoding: "base64"` for content that is not valid UTF-8, preserving the bytes
+returned by GitLab. Omit
+`ref` to read from `HEAD` (the project's default branch).
+
+The job tools use the [GitLab Jobs API](https://docs.gitlab.com/api/jobs/).
+Job logs larger than 1 MiB return a size-limit error instead of a partial log;
+use the job's `web_url` to view larger logs in GitLab.
+
+Rate-limited `429` responses are retried up to three times for all replayable
+requests. Ambiguous `502`, `503`, and `504` responses are retried only for
+`GET`, `HEAD`, `OPTIONS`, and `DELETE` requests. Creates and updates are not
+retried on these errors, because even updates can execute quick actions more
+than once. Retries honor `Retry-After`, capped at 30 seconds per retry.
+
+Commit actions distinguish omitted `content` from an empty string. Create and
+update actions require `content`; use `""` to create or truncate an empty file.
+For move actions, omitting `content` preserves the file's contents, while `""`
+empties the moved file.
 
 Merge requests use GitLab's `Draft:` title convention for draft state. The
 merge tool accepts `auto_merge` to merge when all checks pass; the deprecated
@@ -150,6 +169,9 @@ protects the MCP endpoint and is separate from `GITLAB_TOKEN`. If no MCP auth
 token is configured, the HTTP endpoint has no application-level
 authentication. The server logs a warning when that is combined with
 `readwrite` mode.
+
+Cross-origin browser POST requests are rejected. Native MCP clients without an
+`Origin` header and same-origin browser clients are supported.
 
 ## MCP client configuration
 
@@ -191,7 +213,7 @@ VS Code `.vscode/mcp.json`:
 
 ## Development
 
-Requires Go 1.27.1 or newer, matching `go.mod`.
+Requires Go 1.27.3 or newer, matching `go.mod`.
 
 ```bash
 go build ./...
@@ -201,8 +223,9 @@ go vet ./...
 
 Tests cover configuration, authentication, project-path and file-path
 encoding, pagination headers and links, API errors, safe retry handling, merge
-request drafts and diffs, file decoding, commit payloads, tool mode gating, and
-end-to-end stdio and HTTP MCP connections.
+request drafts and diffs, binary file preservation, empty-file commit actions,
+job details and logs, tool mode gating, secret-safe CLI help, and end-to-end
+stdio and HTTP MCP connections. CI also runs the race detector and `go vet`.
 
 ## License
 

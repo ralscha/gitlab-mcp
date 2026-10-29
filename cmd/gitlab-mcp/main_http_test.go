@@ -41,12 +41,13 @@ func TestHTTPTransportListTools(t *testing.T) {
 		t.Fatal(err)
 	}
 	exitCh := make(chan error, 1)
-	go func() { exitCh <- cmd.Wait() }()
+	go func() {
+		exitCh <- cmd.Wait()
+		close(exitCh)
+	}()
 	defer func() {
-		if cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-			<-exitCh
-		}
+		_ = cmd.Process.Kill()
+		<-exitCh
 	}()
 
 	transport := &mcp.StreamableClientTransport{

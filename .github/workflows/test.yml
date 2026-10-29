@@ -6,11 +6,13 @@ on:
       - '**/*.go'
       - go.mod
       - go.sum
+      - .github/workflows/test.yml
   pull_request:
     paths:
       - '**/*.go'
       - go.mod
       - go.sum
+      - .github/workflows/test.yml
 
 permissions:
   contents: read
@@ -30,4 +32,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run Go tests
-        run: go test ./...
+        run: go test -race ./...
+
+      - name: Run Go static analysis
+        run: go vet ./...

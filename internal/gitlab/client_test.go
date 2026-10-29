@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func testClient(t *testing.T, handler http.HandlerFunc) *Client {
@@ -107,8 +108,8 @@ func TestGetFileDecodesContent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetFile() error = %v", err)
 	}
-	if file.Content != content {
-		t.Errorf("Content = %q", file.Content)
+	if file.Content != content || file.Encoding != "text" {
+		t.Errorf("file = %#v", file)
 	}
 }
 
@@ -131,7 +132,8 @@ func TestCreateCommitPayload(t *testing.T) {
 		w.WriteHeader(http.StatusCreated)
 		_, _ = w.Write([]byte(`{"id":"abc","short_id":"abc","title":"change files"}`))
 	})
-	commit, err := client.CreateCommit(t.Context(), "1", CreateCommitInput{Branch: "feature", CommitMessage: "change files", Actions: []CommitAction{{Action: "update", FilePath: "a.txt", Content: "a"}, {Action: "delete", FilePath: "old.txt"}}})
+	content := "a"
+	commit, err := client.CreateCommit(t.Context(), "1", CreateCommitInput{Branch: "feature", CommitMessage: "change files", Actions: []CommitAction{{Action: "update", FilePath: "a.txt", Content: &content}, {Action: "delete", FilePath: "old.txt"}}})
 	if err != nil {
 		t.Fatalf("CreateCommit() error = %v", err)
 	}
@@ -216,6 +218,39 @@ func TestDoesNotRetryCreateAfterAmbiguousServerError(t *testing.T) {
 	}
 }
 
+func TestDoesNotRetryDescriptionUpdatesAfterAmbiguousServerError(t *testing.T) {
+	var calls atomic.Int32
+	client := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set("Retry-After", "0")
+		w.WriteHeader(http.StatusBadGateway)
+		_, _ = w.Write([]byte(`{"message":"upstream unavailable"}`))
+	})
+	description := "Work done\n/spend 1h"
+	for _, update := range []struct {
+		name string
+		run  func() error
+	}{
+		{"issue", func() error {
+			_, err := client.UpdateIssue(t.Context(), "1", 2, UpdateIssueInput{Description: &description})
+			return err
+		}},
+		{"merge request", func() error {
+			_, err := client.UpdateMergeRequest(t.Context(), "1", 2, UpdateMergeRequestInput{Description: &description})
+			return err
+		}},
+	} {
+		t.Run(update.name, func(t *testing.T) {
+			calls.Store(0)
+			err := update.run()
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusBadGateway || calls.Load() != 1 {
+				t.Fatalf("calls=%d error=%#v", calls.Load(), err)
+			}
+		})
+	}
+}
+
 func TestRefusesCrossOriginRedirect(t *testing.T) {
 	var redirected atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { redirected.Add(1) }))
@@ -227,5 +262,31 @@ func TestRefusesCrossOriginRedirect(t *testing.T) {
 	}
 	if redirected.Load() != 0 {
 		t.Fatal("redirect target was contacted")
+	}
+}
+
+func TestRetryDelayClampsBeforeDurationConversion(t *testing.T) {
+	for _, value := range []string{"31", "9223372036854775807", "18446744073709551616"} {
+		t.Run(value, func(t *testing.T) {
+			response := &http.Response{Header: http.Header{"Retry-After": {value}}}
+			if delay := retryDelay(response, 0); delay != maxRetryDelay {
+				t.Fatalf("retryDelay() = %v, want %v", delay, maxRetryDelay)
+			}
+		})
+	}
+	response := &http.Response{Header: http.Header{"Retry-After": {"2"}}}
+	if delay := retryDelay(response, 0); delay != 2*time.Second {
+		t.Fatalf("retryDelay() = %v, want 2s", delay)
+	}
+}
+
+func TestPaginationCombinesLinkHeadersAndRelations(t *testing.T) {
+	headers := http.Header{"Link": {
+		`<https://gitlab.example.com/api/v4/projects?page=1>; rel="prev"`,
+		`<https://gitlab.example.com/api/v4/projects?page=3>; rel="next last"`,
+	}}
+	page := pagination(headers, 2, 20, 20)
+	if page.PreviousPage != 1 || page.NextPage != 3 || page.TotalPages != 3 || page.LastPage {
+		t.Fatalf("pagination() = %#v", page)
 	}
 }

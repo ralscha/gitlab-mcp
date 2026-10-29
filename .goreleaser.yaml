@@ -6,6 +6,8 @@ builds:
   - id: default
     main: ./cmd/gitlab-mcp
     binary: gitlab-mcp
+    ldflags:
+      - -s -w -X gitlab-mcp/internal/mcpserver.Version={{.Version}}
     env:
       - CGO_ENABLED=0
     goos:

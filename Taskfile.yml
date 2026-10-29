@@ -29,7 +29,7 @@ tasks:
       - go vet ./...
 
   lint:
-    desc: Run golangci-lint in Docker
+    desc: Run golangci-lint
     cmds:
       - golangci-lint run -v --timeout 5m
 

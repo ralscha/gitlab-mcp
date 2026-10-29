@@ -42,6 +42,9 @@ func NewClient(baseURL, token string, httpClient *http.Client) (*Client, error) 
 	if !instance.IsAbs() || instance.Host == "" {
 		return nil, errors.New("gitlab: base URL must be absolute")
 	}
+	if instance.Scheme != "http" && instance.Scheme != "https" {
+		return nil, errors.New("gitlab: base URL must use http or https")
+	}
 	if instance.User != nil || instance.RawQuery != "" || instance.Fragment != "" {
 		return nil, errors.New("gitlab: base URL must not contain user information, a query string, or a fragment")
 	}
@@ -113,15 +116,16 @@ func (c *Client) do(req *http.Request, maxBytes int64) (*http.Response, []byte, 
 
 func isRetryable(req *http.Request, status int) bool {
 	// A rate-limited request has not been accepted and is safe to retry. For
-	// ambiguous gateway failures, retry only methods defined as idempotent so a
-	// create operation cannot be replayed after GitLab already processed it.
+	// ambiguous gateway failures, do not replay writes that GitLab may already
+	// have processed. Even PUT updates can execute non-idempotent quick actions
+	// embedded in issue or merge-request descriptions.
 	if status == http.StatusTooManyRequests {
 		return req.Body == nil || req.GetBody != nil
 	}
 	switch status {
 	case http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
 		switch req.Method {
-		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodPut, http.MethodDelete:
+		case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodDelete:
 			return req.Body == nil || req.GetBody != nil
 		}
 	default:
@@ -131,8 +135,10 @@ func isRetryable(req *http.Request, status int) bool {
 
 func retryDelay(resp *http.Response, attempt int) time.Duration {
 	if value := strings.TrimSpace(resp.Header.Get("Retry-After")); value != "" {
-		if seconds, err := strconv.Atoi(value); err == nil && seconds >= 0 {
-			return min(time.Duration(seconds)*time.Second, maxRetryDelay)
+		if seconds, err := strconv.ParseUint(value, 10, 64); err == nil || errors.Is(err, strconv.ErrRange) {
+			// Clamp before converting to Duration: large server values otherwise
+			// overflow and can turn the requested delay into an immediate retry.
+			return time.Duration(min(seconds, uint64(maxRetryDelay/time.Second))) * time.Second
 		}
 		if at, err := http.ParseTime(value); err == nil {
 			return min(max(time.Until(at), 0), maxRetryDelay)
@@ -253,15 +259,16 @@ func pagination(headers http.Header, page, perPage, resultCount int) PageInfo {
 	info.TotalPages, _ = strconv.Atoi(headers.Get("X-Total-Pages"))
 	info.NextPage, _ = strconv.Atoi(headers.Get("X-Next-Page"))
 	info.PreviousPage, _ = strconv.Atoi(headers.Get("X-Prev-Page"))
-	nextLinkPage, hasNextLink := linkedPage(headers.Get("Link"), "next")
+	linkHeader := strings.Join(headers.Values("Link"), ",")
+	nextLinkPage, hasNextLink := linkedPage(linkHeader, "next")
 	if info.NextPage == 0 {
 		info.NextPage = nextLinkPage
 	}
 	if info.PreviousPage == 0 {
-		info.PreviousPage, _ = linkedPage(headers.Get("Link"), "prev")
+		info.PreviousPage, _ = linkedPage(linkHeader, "prev")
 	}
 	if info.TotalPages == 0 {
-		info.TotalPages, _ = linkedPage(headers.Get("Link"), "last")
+		info.TotalPages, _ = linkedPage(linkHeader, "last")
 	}
 	hasNextHeader := headerPresent(headers, "X-Next-Page")
 	switch {
@@ -271,7 +278,7 @@ func pagination(headers http.Header, page, perPage, resultCount int) PageInfo {
 		info.LastPage = info.Page >= info.TotalPages
 	case hasNextHeader && strings.TrimSpace(headers.Get("X-Next-Page")) == "":
 		info.LastPage = true
-	case headers.Get("Link") != "":
+	case linkHeader != "":
 		info.LastPage = true
 	default:
 		// Without pagination headers, a full page is ambiguous. Do not claim it
@@ -298,9 +305,13 @@ func linkedPage(linkHeader, relation string) (int, bool) {
 		matched := false
 		for _, parameter := range parts[1:] {
 			name, value, ok := strings.Cut(strings.TrimSpace(parameter), "=")
-			if ok && strings.EqualFold(name, "rel") && strings.EqualFold(strings.Trim(value, `"`), relation) {
-				matched = true
-				break
+			if ok && strings.EqualFold(name, "rel") {
+				for rel := range strings.FieldsSeq(strings.Trim(strings.TrimSpace(value), `"`)) {
+					if strings.EqualFold(rel, relation) {
+						matched = true
+						break
+					}
+				}
 			}
 		}
 		if !matched {

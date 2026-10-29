@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"flag"
 	"fmt"
 	"log"
 	"net/http"
@@ -29,6 +30,9 @@ func main() {
 
 func run() error {
 	cfg, err := config.Load(os.Args[1:])
+	if errors.Is(err, flag.ErrHelp) {
+		return nil
+	}
 	if errors.Is(err, config.ErrVersionRequested) {
 		fmt.Println("gitlab-mcp " + mcpserver.ServerVersion())
 		return nil
@@ -56,15 +60,12 @@ func run() error {
 }
 
 func runHTTP(ctx context.Context, cfg *config.Config, server *mcp.Server) error {
-	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true})
-	if cfg.AuthToken != "" {
-		handler = requireBearerToken(cfg.AuthToken, handler)
-	} else if cfg.IsReadWrite() {
+	if cfg.AuthToken == "" && cfg.IsReadWrite() {
 		log.Print("gitlab-mcp: warning: HTTP transport in readwrite mode without --auth-token; anyone who can reach this address can modify GitLab")
 	}
 	httpServer := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           handler,
+		Handler:           newHTTPHandler(cfg, server),
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    1 << 20,
@@ -86,6 +87,15 @@ func runHTTP(ctx context.Context, cfg *config.Config, server *mcp.Server) error 
 		defer cancel()
 		return httpServer.Shutdown(shutdownCtx)
 	}
+}
+
+func newHTTPHandler(cfg *config.Config, server *mcp.Server) http.Handler {
+	var handler http.Handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return server }, &mcp.StreamableHTTPOptions{Stateless: true})
+	handler = http.NewCrossOriginProtection().Handler(handler)
+	if cfg.AuthToken != "" {
+		handler = requireBearerToken(cfg.AuthToken, handler)
+	}
+	return handler
 }
 
 func requireBearerToken(token string, next http.Handler) http.Handler {

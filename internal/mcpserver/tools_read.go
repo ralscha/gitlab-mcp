@@ -269,11 +269,14 @@ func listRepositoryTree(client *gitlab.Client) mcp.ToolHandlerFor[ListTreeInput,
 type GetFileInput struct {
 	Project  string `json:"project" jsonschema:"numeric project id or path such as group/project"`
 	FilePath string `json:"file_path" jsonschema:"full path to the file in the repository"`
-	Ref      string `json:"ref" jsonschema:"branch, tag, or commit SHA"`
+	Ref      string `json:"ref,omitempty" jsonschema:"branch, tag, or commit SHA; defaults to HEAD, the default branch"`
 }
 
 func getFile(client *gitlab.Client) mcp.ToolHandlerFor[GetFileInput, gitlab.FileContent] {
 	return func(ctx context.Context, _ *mcp.CallToolRequest, in GetFileInput) (*mcp.CallToolResult, gitlab.FileContent, error) {
+		if in.Ref == "" {
+			in.Ref = "HEAD"
+		}
 		result, err := client.GetFile(ctx, in.Project, in.FilePath, in.Ref)
 		if err != nil {
 			return nil, gitlab.FileContent{}, fmt.Errorf("get %s at %s in %s: %w", in.FilePath, in.Ref, in.Project, err)
@@ -461,7 +464,7 @@ func registerReadTools(s *mcp.Server, client *gitlab.Client) {
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_merge_request_diffs", Description: "List the per-file diffs for a GitLab merge request.", Annotations: readOnlyHint}, listMergeRequestDiffs(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_merge_request_notes", Description: "List notes on a GitLab merge request.", Annotations: readOnlyHint}, listMergeRequestNotes(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_repository_tree", Description: "List files and directories in a GitLab repository tree.", Annotations: readOnlyHint}, listRepositoryTree(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_file", Description: "Read a repository file at a branch, tag, or commit.", Annotations: readOnlyHint}, getFile(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_file", Description: "Read a repository file at a branch, tag, or commit; defaults to the default branch. The encoding field identifies text or base64 content.", Annotations: readOnlyHint}, getFile(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_branches", Description: "List branches in a GitLab repository.", Annotations: readOnlyHint}, listBranches(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_commits", Description: "List commits in a GitLab repository.", Annotations: readOnlyHint}, listCommits(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_commit", Description: "Get one commit from a GitLab repository.", Annotations: readOnlyHint}, getCommit(client))
@@ -469,4 +472,5 @@ func registerReadTools(s *mcp.Server, client *gitlab.Client) {
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_get_pipeline", Description: "Get one GitLab CI/CD pipeline.", Annotations: readOnlyHint}, getPipeline(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_list_pipeline_jobs", Description: "List jobs in a GitLab CI/CD pipeline.", Annotations: readOnlyHint}, listPipelineJobs(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_search", Description: "Search GitLab globally or within a group or project.", Annotations: readOnlyHint}, search(client))
+	registerJobTools(s, client)
 }

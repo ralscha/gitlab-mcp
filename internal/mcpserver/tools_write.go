@@ -42,14 +42,14 @@ type UpdateIssueInput struct {
 	Project      string    `json:"project" jsonschema:"numeric project id or path such as group/project"`
 	IID          int       `json:"iid" jsonschema:"project-scoped issue IID"`
 	Title        *string   `json:"title,omitempty" jsonschema:"new issue title"`
-	Description  *string   `json:"description,omitempty" jsonschema:"new description in GitLab Flavored Markdown; empty clears it"`
+	Description  *string   `json:"description,omitempty" jsonschema:"new description in GitLab Flavored Markdown; empty clears it; GitLab executes quick actions"`
 	Confidential *bool     `json:"confidential,omitempty" jsonschema:"new confidential status"`
 	Labels       *[]string `json:"labels,omitempty" jsonschema:"replacement labels; an empty list removes all labels"`
 	AssigneeIDs  *[]int    `json:"assignee_ids,omitempty" jsonschema:"replacement numeric assignee ids; an empty list unassigns everyone"`
 	MilestoneID  *int      `json:"milestone_id,omitempty" jsonschema:"new milestone id; use 0 to remove the milestone"`
 	DueDate      *string   `json:"due_date,omitempty" jsonschema:"new due date as YYYY-MM-DD; empty clears it"`
 	IssueType    *string   `json:"issue_type,omitempty" jsonschema:"new issue type"`
-	Weight       *int      `json:"weight,omitempty" jsonschema:"new issue weight; use 0 to remove it"`
+	Weight       *int      `json:"weight,omitempty" jsonschema:"new non-negative issue weight, including 0"`
 	StateEvent   *string   `json:"state_event,omitempty" jsonschema:"state transition: close or reopen"`
 }
 
@@ -70,7 +70,7 @@ func updateIssue(client *gitlab.Client) mcp.ToolHandlerFor[UpdateIssueInput, git
 type AddNoteInput struct {
 	Project  string `json:"project" jsonschema:"numeric project id or path such as group/project"`
 	IID      int    `json:"iid" jsonschema:"project-scoped issue or merge request IID"`
-	Body     string `json:"body" jsonschema:"note body in GitLab Flavored Markdown"`
+	Body     string `json:"body" jsonschema:"note body in GitLab Flavored Markdown; GitLab executes quick actions, which can modify the issue or merge request"`
 	Internal bool   `json:"internal,omitempty" jsonschema:"make the note visible only to project members with sufficient access"`
 }
 
@@ -118,7 +118,7 @@ type UpdateMergeRequestInput struct {
 	Project            string    `json:"project" jsonschema:"numeric project id or path such as group/project"`
 	IID                int       `json:"iid" jsonschema:"project-scoped merge request IID"`
 	Title              *string   `json:"title,omitempty" jsonschema:"new title"`
-	Description        *string   `json:"description,omitempty" jsonschema:"new description; empty clears it"`
+	Description        *string   `json:"description,omitempty" jsonschema:"new description; empty clears it; GitLab executes quick actions"`
 	TargetBranch       *string   `json:"target_branch,omitempty" jsonschema:"new target branch"`
 	StateEvent         *string   `json:"state_event,omitempty" jsonschema:"state transition: close or reopen"`
 	Draft              *bool     `json:"draft,omitempty" jsonschema:"new draft status"`
@@ -204,7 +204,7 @@ type CreateCommitInput struct {
 	StartSHA      string                `json:"start_sha,omitempty" jsonschema:"commit SHA to create the target branch from"`
 	AuthorEmail   string                `json:"author_email,omitempty" jsonschema:"commit author email"`
 	AuthorName    string                `json:"author_name,omitempty" jsonschema:"commit author name"`
-	Actions       []gitlab.CommitAction `json:"actions" jsonschema:"file actions; action is create, update, move, delete, or chmod; content may use text or base64 encoding"`
+	Actions       []gitlab.CommitAction `json:"actions" jsonschema:"file actions: create/update require content (empty string allowed), move requires previous_path (omit content to preserve it), chmod requires execute_filemode, delete requires only file_path; content encoding is text or base64"`
 }
 
 func createCommit(client *gitlab.Client) mcp.ToolHandlerFor[CreateCommitInput, gitlab.Commit] {
@@ -249,11 +249,11 @@ func retryPipeline(client *gitlab.Client) mcp.ToolHandlerFor[PipelineInput, gitl
 
 func registerWriteTools(s *mcp.Server, client *gitlab.Client) {
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_issue", Description: "Create a GitLab issue.", Annotations: nonDestructiveHint}, createIssue(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_update_issue", Description: "Update, close, or reopen a GitLab issue.", Annotations: &mcp.ToolAnnotations{DestructiveHint: new(false), IdempotentHint: true}}, updateIssue(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_add_issue_note", Description: "Add a Markdown note to a GitLab issue.", Annotations: nonDestructiveHint}, addIssueNote(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_update_issue", Description: "Update, close, or reopen a GitLab issue.", Annotations: destructiveHint}, updateIssue(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_add_issue_note", Description: "Add a Markdown note to a GitLab issue. Quick actions can modify the issue.", Annotations: destructiveHint}, addIssueNote(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_merge_request", Description: "Create a GitLab merge request.", Annotations: nonDestructiveHint}, createMergeRequest(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_update_merge_request", Description: "Update, close, or reopen a GitLab merge request.", Annotations: &mcp.ToolAnnotations{DestructiveHint: new(false), IdempotentHint: true}}, updateMergeRequest(client))
-	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_add_merge_request_note", Description: "Add a Markdown note to a GitLab merge request.", Annotations: nonDestructiveHint}, addMergeRequestNote(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_update_merge_request", Description: "Update, close, or reopen a GitLab merge request.", Annotations: destructiveHint}, updateMergeRequest(client))
+	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_add_merge_request_note", Description: "Add a Markdown note to a GitLab merge request. Quick actions can modify the merge request.", Annotations: destructiveHint}, addMergeRequestNote(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_accept_merge_request", Description: "Merge a GitLab merge request now or automatically when all checks pass.", Annotations: destructiveHint}, acceptMergeRequest(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_branch", Description: "Create a GitLab repository branch.", Annotations: nonDestructiveHint}, createBranch(client))
 	mcp.AddTool(s, &mcp.Tool{Name: "gitlab_create_commit", Description: "Create a GitLab commit with one or more create, update, move, delete, or chmod file actions.", Annotations: destructiveHint}, createCommit(client))
